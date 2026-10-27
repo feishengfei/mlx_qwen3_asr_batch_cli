@@ -4,7 +4,7 @@ Qwen3‑ASR‑MLX Batch CLI
 从ComfyUI节点 Qwen3ASRMLXBatchFolder 提取独立命令行工具
 批量处理多个分片音频目录，自动累加时间偏移，输出字幕 txt/srt/vtt/json/lrc
 Only for Apple Silicon Mac (MLX backend)
-新增：基于词级时间戳做字幕二次切分，中文标点优先，字符/时长双重上限保护
+⚠️无aligner，文本切分 + 字符占比时间插值；兼容中英文标点扩展
 """
 import os
 import re
@@ -15,39 +15,30 @@ from pathlib import Path
 from soundfile import info
 from mlx_audio.stt.utils import load_model
 from mlx_audio.stt.generate import generate_transcription
-
 # =============================================================================
 # ⚠️ 开源使用者请修改此处默认模型路径
 DEFAULT_MODEL_DIR = "/Users/felix/mlx/Qwen3-ASR-1.7B-bf16"
 # =============================================================================
-
 # ====================== 字幕后处理切分配置（大写常量可修改） ==================
-SUBTITLE_MAX_CHARS = 35        # 单条字幕最大汉字字符数
+SUBTITLE_MAX_CHARS = 35        # 单条字幕最大字符数(中英文均按字符计数)
 SUBTITLE_MAX_DURATION_S = 6.0  # 单条字幕最大时长(秒)
-SUBTITLE_SPLIT_PUNCT = "，。！？；"  # 优先切分的中文标点
+SUBTITLE_SPLIT_PUNCT = "，。！？；"       # 中文优先切分标点
+SUBTITLE_SPLIT_PUNCT_EN = ",.!?;"        # 英文切分标点，需要切英文稿直接启用
 # =============================================================================
-
-
 def format_timestamp(seconds: float) -> str:
     """Convert seconds to HH:MM:SS,mmm format for SRT"""
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     seconds = seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}".replace(".", ",")
-
-
 def format_vtt_timestamp(seconds: float) -> str:
     """Convert seconds to HH:MM:SS.mmm format for VTT"""
     return format_timestamp(seconds).replace(",", ".")
-
-
 def format_lrc_timestamp(seconds: float) -> str:
     """LRC格式：mm:ss.xx"""
     mm = int(seconds // 60)
     ss = seconds % 60
     return f"{mm:02d}:{ss:05.2f}"
-
-
 def save_as_lrc(all_segments, output_path: str, title: str = "", artist: str = "", album: str = "", lrc_by: str = ""):
     """增强版LRC生成：元标签 + segment内多行均匀分配时间戳"""
     lrc_lines = []
@@ -82,14 +73,10 @@ def save_as_lrc(all_segments, output_path: str, title: str = "", artist: str = "
     lrc_content = "\n".join(lrc_lines)
     with open(f"{output_path}.lrc", "w", encoding="utf-8") as f:
         f.write(lrc_content)
-
-
 def save_as_txt_merged(all_segments, output_path: str):
     full_text = "\n".join(s["text"].strip() for s in all_segments)
     with open(f"{output_path}.txt", "w", encoding="utf-8") as f:
         f.write(full_text)
-
-
 def save_as_srt_merged(all_segments, output_path: str):
     lines = []
     for idx, seg in enumerate(all_segments, start=1):
@@ -98,8 +85,6 @@ def save_as_srt_merged(all_segments, output_path: str):
         lines.append(f"{idx}\n{s} --> {e}\n{seg['text'].strip()}\n")
     with open(f"{output_path}.srt", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-
-
 def save_as_vtt_merged(all_segments, output_path: str):
     lines = ["WEBVTT", ""]
     for idx, seg in enumerate(all_segments, start=1):
@@ -108,8 +93,6 @@ def save_as_vtt_merged(all_segments, output_path: str):
         lines.append(f"{idx}\n{s} --> {e}\n{seg['text'].strip()}\n")
     with open(f"{output_path}.vtt", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-
-
 def save_as_json_merged(all_segments, output_path: str):
     payload = {
         "segments": all_segments,
@@ -118,71 +101,70 @@ def save_as_json_merged(all_segments, output_path: str):
     with open(f"{output_path}.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
-
-def split_segments_by_words(seg_items, max_chars: int, max_dur: float, puncts: str):
+def split_by_text_ratio_interpolate(seg_items, max_chars: int, max_dur: float, puncts: str):
     """
-    基于词级时间戳对单分片内原始segments做字幕切分
-    规则：中文标点优先断开，再做字符数/时长上限强制截断
-    返回：新的局部segment列表（未加offset），dict格式 {"start":float,"end":float,"text":str}
-    防御：words为空则直接返回原始片段，不做切分
+    无align、无word时间戳：按标点/最大字符切分，按【字符数量占比】分配片段时长
+    字符计数使用len()，天然兼容中文、英文混合文本
+    :param seg_items: ASR输出segment列表，仅包含 start,end,text
+    :param max_chars: 单片段最大字符数
+    :param max_dur: 单片段最大时长(本函数仅作为配置保留，切分逻辑以标点+字符数为主)
+    :param puncts: 切分标点集合字符串
+    :return: list[dict], 局部时间(未叠加分片offset) [{"start":float,"end":float,"text":str}]
     """
     out = []
     punct_set = set(puncts)
-
     for seg in seg_items:
-        words = None
         if isinstance(seg, dict):
-            words = seg.get("words")
             seg_start = seg.get("start", 0.0)
             seg_end = seg.get("end", 0.0)
-            seg_text = seg.get("text", "").strip()
+            full_text = seg.get("text", "").strip()
         else:
-            words = getattr(seg, "words", None)
             seg_start = getattr(seg, "start", 0.0)
             seg_end = getattr(seg, "end", 0.0)
-            seg_text = getattr(seg, "text", "").strip()
+            full_text = getattr(seg, "text", "").strip()
 
-        # 没有词级时间戳，降级，原样保留该段
-        if not words or len(words) == 0:
-            out.append({"start": seg_start, "end": seg_end, "text": seg_text})
+        seg_total_dur = seg_end - seg_start
+        # 边界保护：空文本或时长接近0，直接原样返回
+        if not full_text or seg_total_dur <= 1e-6:
+            out.append({"start": seg_start, "end": seg_end, "text": full_text})
             continue
 
-        buf_words = []
-        buf_text = []
+        pieces = []
+        buf = []
+        for ch in full_text:
+            buf.append(ch)
+            buf_str = "".join(buf)
+            # 遇到切分标点 或 字符数达到上限，执行断开
+            if ch in punct_set or len(buf_str) >= max_chars:
+                piece = buf_str.strip()
+                if piece:
+                    pieces.append(piece)
+                buf.clear()
+        # 缓冲区剩余内容
+        if buf:
+            piece = "".join(buf).strip()
+            if piece:
+                pieces.append(piece)
 
-        for w in words:
-            w_text = w.get("text", "").strip()
-            w_start = w.get("start")
-            w_end = w.get("end")
-            if not w_text:
-                continue
-            buf_words.append((w_start, w_end, w_text))
-            buf_text.append(w_text)
-            current_text = "".join(buf_text)
-            current_len = len(current_text)
-            current_dur = buf_words[-1][1] - buf_words[0][0]
+        if len(pieces) == 0:
+            out.append({"start": seg_start, "end": seg_end, "text": full_text})
+            continue
 
-            hit_punct = any(ch in punct_set for ch in w_text)
-            need_split = hit_punct or (current_len >= max_chars) or (current_dur >= max_dur)
-
-            if need_split:
-                piece_text = "".join(buf_text).strip()
-                piece_start = buf_words[0][0]
-                piece_end = buf_words[-1][1]
-                if piece_text:
-                    out.append({"start": piece_start, "end": piece_end, "text": piece_text})
-                buf_words.clear()
-                buf_text.clear()
-
-        # 处理缓冲区剩余部分
-        if buf_words:
-            piece_text = "".join(buf_text).strip()
-            piece_start = buf_words[0][0]
-            piece_end = buf_words[-1][1]
-            if piece_text:
-                out.append({"start": piece_start, "end": piece_end, "text": piece_text})
+        # 全部子片段总字符数，用于计算占比
+        total_char = sum(len(p) for p in pieces)
+        cur_t = seg_start
+        for piece in pieces:
+            char_cnt = len(piece)
+            ratio = char_cnt / total_char
+            piece_dur = seg_total_dur * ratio
+            p_end = cur_t + piece_dur
+            out.append({
+                "start": cur_t,
+                "end": p_end,
+                "text": piece
+            })
+            cur_t = p_end
     return out
-
 
 def process_single_folder(
     model,
@@ -236,7 +218,7 @@ def process_single_folder(
                 format="json",
                 verbose=verbose,
                 language=lang_arg,
-                return_timestamps=True,  # 开启获取词级时间戳，用于字幕切分
+                return_timestamps=True,
             )
             seg_items = []
             if hasattr(seg_obj, "segments"):
@@ -248,13 +230,15 @@ def process_single_folder(
                 with open(temp_json, "r", encoding="utf-8") as f:
                     jdata = json.load(f)
                 seg_items = jdata.get("segments", [])
-
             if not no_split_subtitle:
-                local_segs = split_segments_by_words(
+                # 中英文标点合并；如需处理英文文稿，直接将 SUBTITLE_SPLIT_PUNCT_EN 拼接进来
+                all_punct = SUBTITLE_SPLIT_PUNCT
+                # all_punct = SUBTITLE_SPLIT_PUNCT + SUBTITLE_SPLIT_PUNCT_EN
+                local_segs = split_by_text_ratio_interpolate(
                     seg_items,
                     max_chars=SUBTITLE_MAX_CHARS,
                     max_dur=SUBTITLE_MAX_DURATION_S,
-                    puncts=SUBTITLE_SPLIT_PUNCT
+                    puncts=all_punct
                 )
             else:
                 # 不切分，原样转换为dict
@@ -271,14 +255,12 @@ def process_single_folder(
                         d["text"] = getattr(s, "text", "").strip()
                     if d["text"]:
                         local_segs.append(d)
-
             # 叠加分片全局时间偏移，加入总集合
             for d in local_segs:
                 d["start"] = d["start"] + total_offset
                 d["end"] = d["end"] + total_offset
                 if d["text"]:
                     all_merged_segments.append(d)
-
             total_offset += dur
     print(f"\n✅分片全部识别完成；合并总时长 {total_offset:.2f}s；有效字幕段：{len(all_merged_segments)}")
     # 输出路径推导：输入目录C → 输出到C.parent，文件名=C.name
@@ -290,7 +272,7 @@ def process_single_folder(
     elif out_format == "srt":
         save_as_srt_merged(all_merged_segments, out_base)
     elif out_format == "vtt":
-        save_as_vtt_merged(all_segments, out_base)
+        save_as_vtt_merged(all_merged_segments, out_base)
     elif out_format == "json":
         save_as_json_merged(all_merged_segments, out_base)
     elif out_format == "lrc":
@@ -307,11 +289,9 @@ def process_single_folder(
     final_out = Path(f"{out_base}.{out_format}")
     print(f"📄输出字幕文件: {final_out.resolve()}")
     return final_out
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Qwen3‑ASR‑MLX Batch CLI，批量处理TTS分片音频目录，合并输出字幕，支持词级时间戳自动切分字幕",
+        description="Qwen3‑ASR‑MLX Batch CLI，批量处理TTS分片音频目录，字符占比插值切分字幕，无align",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     # 位置参数：多个音频目录
@@ -365,11 +345,10 @@ def main():
     parser.add_argument("--lrc-artist", default="", help="LRC ar 艺术家标签，仅format=lrc生效")
     parser.add_argument("--lrc-album", default="", help="LRC al 专辑标签，仅format=lrc生效")
     parser.add_argument("--lrc-by", default="Qwen3‑ASR‑MLX", help="LRC by生成标识，仅format=lrc生效")
-
     args = parser.parse_args()
     # 路径展开 ~
     audio_dir_list = [Path(p).expanduser() for p in args.audio_dirs]
-    print(f"🚀 Qwen3‑ASR‑MLX Batch CLI")
+    print(f"🚀 Qwen3‑ASR‑MLX Batch CLI【字符占比插值，无align】")
     if not args.no_split_subtitle:
         print(f"✂️ 字幕自动切分开启：max_chars={SUBTITLE_MAX_CHARS}, max_dur={SUBTITLE_MAX_DURATION_S}s")
     else:
@@ -398,12 +377,13 @@ def main():
             success_count += 1
         except Exception as e:
             print(f"\n❌处理目录 [{folder}] 失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             fail_count += 1
             continue
     print(f"\n{'='*60}")
     print(f"🏁全部任务结束。成功:{success_count} 失败:{fail_count}")
     print(f"{'='*60}")
-
 
 if __name__ == "__main__":
     main()
