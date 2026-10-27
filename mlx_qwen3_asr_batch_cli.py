@@ -137,6 +137,9 @@ def split_by_text_ratio_interpolate(seg_items, max_chars: int, max_dur: float, p
             # 遇到切分标点 或 字符数达到上限，执行断开
             if ch in punct_set or len(buf_str) >= max_chars:
                 piece = buf_str.strip()
+                # 去除片段末尾的切分标点
+                while len(piece) > 0 and piece[-1] in punct_set:
+                    piece = piece[:-1].strip()
                 if piece:
                     pieces.append(piece)
                 buf.clear()
