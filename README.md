@@ -104,3 +104,30 @@ LRC标签参数（仅输出格式为lrc时生效）:
 2. 分片文件命名必须遵守 `prefix_数字.wav/mp3`，依靠数字序号排序。
 3. 输入路径支持 `~` 用户家目录简写
    
+
+# Wrapper 包装脚本 mlx_qwen3_asr_batch_cli_wrapper.py
+提供递归扫描、自动跳过已生成字幕、强制重跑能力，适合批量遍历整个TODO文件夹。
+
+## Wrapper 参数
+- `-r / --recursive`：开启递归扫描，从传入根目录向下查找所有包含 *.wav 的父目录（分片目录）
+- `-f / --force`：强制重跑，**不跳过已存在的字幕文件**，覆盖输出
+
+> ⚠️ 注意区分：
+> wrapper 的 `--out-format` 是字幕格式（srt/lrc等）
+> wrapper 的 `-f` 是 force 强制标记，二者不再冲突
+
+## 典型调用
+```bash
+# 递归扫描TODO目录，已经有srt的自动跳过
+mlx-asr-batch -r ~/Downloads/TODO/
+
+# 递归扫描 + 强制全部重生成lrc
+mlx-asr-batch -r -f --out-format lrc ~/Downloads/TODO/
+
+
+# TIPS for zsh
+
+```shell
+alias mlx-asr-batch='python ~/bin/mlx_qwen3_asr_batch_cli/mlx_qwen3_asr_batch_cli_wrapper.py'
+```
+
