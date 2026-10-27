@@ -111,12 +111,20 @@ LRC标签参数（仅输出格式为lrc时生效）:
 ## Wrapper 参数
 - `-r / --recursive`：开启递归扫描，从传入根目录向下查找所有包含 *.wav 的父目录（分片目录）
 - `-f / --force`：强制重跑，**不跳过已存在的字幕文件**，覆盖输出
+- '-n / --dry-run` 预演模式
+只做目录扫描、判断跳过逻辑，**不加载模型、不运行ASR、不写出任何字幕文件**。
+适合先预览批量任务范围，避免误覆盖。
 
 > ⚠️ 注意区分：
 > wrapper 的 `--out-format` 是字幕格式（srt/lrc等）
 > wrapper 的 `-f` 是 force 强制标记，二者不再冲突
 
 ## 典型调用
+
+zshrc/bashrc中添加alias:
+```shell
+alias mlx-asr-batch='python ~/bin/mlx_qwen3_asr_batch_cli/mlx_qwen3_asr_batch_cli_wrapper.py'
+```
 ```bash
 # 递归扫描TODO目录，已经有srt的自动跳过
 mlx-asr-batch -r ~/Downloads/TODO/
@@ -124,10 +132,6 @@ mlx-asr-batch -r ~/Downloads/TODO/
 # 递归扫描 + 强制全部重生成lrc
 mlx-asr-batch -r -f --out-format lrc ~/Downloads/TODO/
 
-
-# TIPS for zsh
-
-```shell
-alias mlx-asr-batch='python ~/bin/mlx_qwen3_asr_batch_cli/mlx_qwen3_asr_batch_cli_wrapper.py'
+# 预演递归扫描
+mlx-asr-batch -r -n ~/Downloads/TODO/
 ```
-

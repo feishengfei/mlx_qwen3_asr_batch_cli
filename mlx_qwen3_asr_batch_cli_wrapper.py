@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Wrapper for mlx_qwen3_asr_batch_cli.py
-新增递归扫描、自动跳过已生成字幕、force强制重跑
+新增递归扫描、自动跳过已存在字幕、force强制重跑、dry-run预演
 """
 import argparse
 from pathlib import Path
 from typing import Set, List
 
-# 导入原版cli里的处理函数、常量、保存函数
+# 导入原版cli里的处理函数、常量
 from mlx_qwen3_asr_batch_cli import (
     DEFAULT_MODEL_DIR,
     process_single_folder,
@@ -50,6 +50,11 @@ def main():
         "-f", "--force",
         action="store_true",
         help="强制模式：不跳过已有字幕文件，全部重新生成"
+    )
+    parser.add_argument(
+        "-n", "--dry-run",
+        action="store_true",
+        help="预演模式：只列出待处理/跳过清单，不加载模型、不运行ASR、不写入文件"
     )
     parser.add_argument(
         "scan_root",
@@ -96,11 +101,30 @@ def main():
         print("❌ 没有找到任何待处理分片目录，退出")
         return
 
-    print(f"\n📋 待处理分片目录清单（共 {len(target_folders)} 个）")
+    print(f"\n📋 扫描得到分片目录清单（共 {len(target_folders)} 个）")
     for d in target_folders:
         print(f"   - {d}")
 
-    # 加载模型一次，全局复用
+    # dry-run：只做预判，不加载模型、不跑识别
+    if args.dry_run:
+        print("\n🧪 ====== DRY-RUN 预演模式，不会执行识别和写文件 ======")
+        dry_skip = 0
+        dry_todo = 0
+        out_fmt = args.out_format
+        for folder in target_folders:
+            out_file = folder.parent / f"{folder.name}.{out_fmt}"
+            if (not args.force) and should_skip(folder, out_fmt):
+                print(f"⏭️ [DRY] 跳过 {folder.name} → {out_file} 已存在")
+                dry_skip += 1
+            else:
+                print(f"▶️  [DRY] 将处理 {folder.name} → {out_file}")
+                dry_todo += 1
+        print("\n" + "="*70)
+        print(f"📊 预演汇总：待处理={dry_todo} | 将跳过={dry_skip}")
+        print("="*70)
+        return
+
+    # 正常运行：加载模型一次，全局复用
     print(f"\n🚀 加载模型：{args.model_dir}")
     model = load_model(args.model_dir)
     print("✅ 模型加载完成\n")
@@ -108,9 +132,9 @@ def main():
     success_count = 0
     skip_count = 0
     fail_count = 0
+    out_fmt = args.out_format
 
     for folder in target_folders:
-        out_fmt = args.out_format
         out_file = folder.parent / f"{folder.name}.{out_fmt}"
 
         if (not args.force) and should_skip(folder, out_fmt):
