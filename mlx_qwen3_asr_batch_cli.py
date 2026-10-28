@@ -24,6 +24,7 @@ SUBTITLE_MAX_CHARS = 35        # 单条字幕最大字符数(中英文均按字�
 SUBTITLE_MAX_DURATION_S = 6.0  # 单条字幕最大时长(秒)
 SUBTITLE_SPLIT_PUNCT = "，。！？；"       # 中文优先切分标点
 SUBTITLE_SPLIT_PUNCT_EN = ",.!?;"        # 英文切分标点，需要切英文稿直接启用
+TRIM_PUNCT_EXCEPT = "！？!?" # trim ending except zh/en exclamation & question mark
 # =============================================================================
 def format_timestamp(seconds: float) -> str:
     """Convert seconds to HH:MM:SS,mmm format for SRT"""
@@ -138,7 +139,7 @@ def split_by_text_ratio_interpolate(seg_items, max_chars: int, max_dur: float, p
             if ch in punct_set or len(buf_str) >= max_chars:
                 piece = buf_str.strip()
                 # 去除片段末尾的切分标点
-                while len(piece) > 0 and piece[-1] in punct_set:
+                while len(piece) > 0 and piece[-1] in punct_set and piece[-1] not in TRIM_PUNCT_EXCEPT:
                     piece = piece[:-1].strip()
                 if piece:
                     pieces.append(piece)
@@ -235,8 +236,8 @@ def process_single_folder(
                 seg_items = jdata.get("segments", [])
             if not no_split_subtitle:
                 # 中英文标点合并；如需处理英文文稿，直接将 SUBTITLE_SPLIT_PUNCT_EN 拼接进来
-                all_punct = SUBTITLE_SPLIT_PUNCT
-                # all_punct = SUBTITLE_SPLIT_PUNCT + SUBTITLE_SPLIT_PUNCT_EN
+                # all_punct = SUBTITLE_SPLIT_PUNCT
+                all_punct = SUBTITLE_SPLIT_PUNCT + SUBTITLE_SPLIT_PUNCT_EN
                 local_segs = split_by_text_ratio_interpolate(
                     seg_items,
                     max_chars=SUBTITLE_MAX_CHARS,
