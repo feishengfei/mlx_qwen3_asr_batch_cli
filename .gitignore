@@ -1,0 +1,4 @@
+.*.swp
+.*.swo
+tags
+__pycache__

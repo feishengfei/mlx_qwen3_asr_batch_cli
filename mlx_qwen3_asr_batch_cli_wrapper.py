@@ -61,6 +61,12 @@ def main():
         nargs="+",
         help="扫描根目录；-r开启后才会递归搜索wav父目录；不使用-r则等价原版，直接作为目录列表传入"
     )
+    parser.add_argument(
+        "--no-split-subtitle",
+        action="store_true",
+        default=False,
+        help="关闭自动字幕切分，输出ASR原始segment，用于对比调试"
+    )
 
     # 透传给底层ASR的参数（和原版cli对齐）
     parser.add_argument("-m", "--model-dir", default=DEFAULT_MODEL_DIR, help="Qwen3-ASR MLX模型目录")
@@ -154,7 +160,8 @@ def main():
                 lrc_title=args.lrc_title,
                 lrc_artist=args.lrc_artist,
                 lrc_album=args.lrc_album,
-                lrc_by=args.lrc_by
+                lrc_by=args.lrc_by,
+                no_split_subtitle=args.no_split_subtitle
             )
             success_count += 1
         except Exception as e:
