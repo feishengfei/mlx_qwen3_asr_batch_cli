@@ -135,3 +135,18 @@ mlx-asr-batch -r -f --out-format lrc ~/Downloads/TODO/
 # 预演递归扫描
 mlx-asr-batch -r -n ~/Downloads/TODO/
 ```
+
+## slibling 
+
+mlx_qwen3_asr_cli.py for single_audio_file
+
+``` shell
+# 默认输出 srt
+python3 mlx_qwen3_asr_cli.py ~/audio/demo.wav
+
+#输出 lrc，并填写元数据
+python3 mlx_qwen3_asr_cli.py ~/audio/demo.mp3 -f lrc --lrc-title "测试音频" --lrc-artist "speaker"
+
+#关闭字幕切分，输出原始segments json
+python3 mlx_qwen3_asr_cli.py ~/audio/demo.wav -f json --no-split-subtitle
+```
